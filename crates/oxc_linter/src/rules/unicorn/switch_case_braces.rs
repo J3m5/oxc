@@ -142,7 +142,15 @@ impl Rule for SwitchCaseBraces {
             };
 
             if self.always_braces && missing_braces {
-                let colon = u32::try_from(ctx.source_range(case.span).find(':').unwrap()).unwrap();
+                let colon = if let Some(test) = &case.test {
+                    let case_source = ctx.source_range(case.span);
+                    let start = (test.span().end - case.span.start) as usize;
+                    let relative_source = &case_source[start..];
+                    let rel_colon = relative_source.find(':').unwrap();
+                    u32::try_from(start + rel_colon).unwrap()
+                } else {
+                    u32::try_from(ctx.source_range(case.span).find(':').unwrap()).unwrap()
+                };
                 let span = Span::sized(case.span.start, colon + 1);
                 ctx.diagnostic_with_fix(
                     switch_case_braces_diagnostic_missing_braces(span),
@@ -197,6 +205,7 @@ fn test() {
         "switch(foo) { default: label: {} }",
         "switch(something) { case 1: case 2: { console.log('something'); break; } case 3: console.log('something else'); }",
         "switch(foo){ case 1: {}; break; }",
+        "switch(foo) { case \"https://schema.org/Integer\": return \"integer\"; }",
     ];
 
     let fix = vec![
@@ -220,6 +229,11 @@ fn test() {
             "switch(foo) { default: {doSomething();} }",
             "switch(foo) { default: doSomething(); }",
             Some(serde_json::json!(["avoid"])),
+        ),
+        (
+            "switch(foo) { case \"https://schema.org/Integer\": return \"integer\"; }",
+            "switch(foo) { case \"https://schema.org/Integer\": { return \"integer\";} }",
+            None,
         ),
         // Issue: https://github.com/oxc-project/oxc/issues/8491
         (
