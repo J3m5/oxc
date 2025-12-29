@@ -284,8 +284,8 @@
     ]
   },
   "activationEvents": [
-    "onLanguage:css",
     "onLanguage:astro",
+    "onLanguage:css",
     "onLanguage:javascript",
     "onLanguage:javascriptreact",
     "onLanguage:json",
