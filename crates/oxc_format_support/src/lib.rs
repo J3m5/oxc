@@ -14,7 +14,7 @@ pub fn detect_prettier_file(path: &Path) -> Option<PrettierFileStrategy> {
         "json" => "json",
         "jsonc" => "jsonc",
         "css" => "css",
-        "md" => "markdown",
+        "md" | "markdown" => "markdown",
         _ => return None,
     };
 
@@ -34,6 +34,10 @@ pub fn load_oxfmtrc(root: &Path) -> Result<(FormatOptions, Value), String> {
 
 /// Load an `.oxfmtrc.json`/`.oxfmtrc.jsonc` from an explicit path and return
 /// the resolved formatter options plus Prettier `external_options`.
+///
+/// # Errors
+/// Returns an error if the config file cannot be read, contains invalid JSONC,
+/// or fails to deserialize into `Oxfmtrc`.
 pub fn load_oxfmtrc_from_path(
     config_path: Option<&Path>,
 ) -> Result<(FormatOptions, Value), String> {
@@ -100,6 +104,7 @@ mod tests {
             ("file.jsonc", "jsonc"),
             ("file.css", "css"),
             ("file.md", "markdown"),
+            ("file.markdown", "markdown"),
         ];
 
         for (path, parser_name) in cases {
