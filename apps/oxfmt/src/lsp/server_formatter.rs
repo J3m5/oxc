@@ -10,7 +10,6 @@ use oxc_formatter::{
     oxfmtrc::{OxfmtOptions, Oxfmtrc},
 };
 use oxc_parser::Parser;
-#[cfg(feature = "lsp-prettier")]
 use serde_json::Value;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
@@ -22,9 +21,7 @@ use crate::lsp::{
 use oxc_language_server::{Capabilities, Tool, ToolBuilder, ToolRestartChanges, utils::normalize_path};
 
 #[cfg(feature = "lsp-prettier")]
-use oxc_format_support::{
-    PrettierFileStrategy, detect_prettier_file, load_oxfmtrc_from_path,
-};
+use oxc_format_support::{PrettierFileStrategy, detect_prettier_file, load_oxfmtrc_from_path};
 
 #[derive(Clone, Default)]
 pub struct ServerFormatterBuilder {
@@ -97,11 +94,7 @@ impl ToolBuilder for ServerFormatterBuilder {
             Some(tower_lsp_server::ls_types::OneOf::Left(true));
     }
     fn build_boxed(&self, root_uri: &Uri, options: serde_json::Value) -> Box<dyn Tool> {
-        Box::new(ServerFormatterBuilder::build(
-            root_uri,
-            options,
-            self.external_bridge.clone(),
-        ))
+        Box::new(ServerFormatterBuilder::build(root_uri, options, self.external_bridge.clone()))
     }
 }
 
@@ -340,10 +333,7 @@ impl Tool for ServerFormatter {
         if let Some(strategy) = detect_prettier_file(&path) {
             let PrettierFileStrategy::External { parser_name } = strategy;
             let Some(bridge) = &self.external_bridge else {
-                debug!(
-                    "External formatter bridge not available for {}",
-                    path.display()
-                );
+                debug!("External formatter bridge not available for {}", path.display());
                 return None;
             };
 
@@ -356,10 +346,7 @@ impl Tool for ServerFormatter {
             ) {
                 Ok(code) => code,
                 Err(err) => {
-                    debug!(
-                        "External formatter failed for {}: {err}",
-                        path.display()
-                    );
+                    debug!("External formatter failed for {}: {err}", path.display());
                     return None;
                 }
             };

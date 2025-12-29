@@ -34,14 +34,17 @@ pub fn load_oxfmtrc(root: &Path) -> Result<(FormatOptions, Value), String> {
 
 /// Load an `.oxfmtrc.json`/`.oxfmtrc.jsonc` from an explicit path and return
 /// the resolved formatter options plus Prettier `external_options`.
-pub fn load_oxfmtrc_from_path(config_path: Option<&Path>) -> Result<(FormatOptions, Value), String> {
+pub fn load_oxfmtrc_from_path(
+    config_path: Option<&Path>,
+) -> Result<(FormatOptions, Value), String> {
     let json_string = match config_path {
         Some(path) => {
             let mut json_string = std::fs::read_to_string(path)
                 // Do not include OS error, it differs between platforms
                 .map_err(|_| format!("Failed to read config {}: File not found", path.display()))?;
-            json_strip_comments::strip(&mut json_string)
-                .map_err(|err| format!("Failed to strip comments from {}: {err}", path.display()))?;
+            json_strip_comments::strip(&mut json_string).map_err(|err| {
+                format!("Failed to strip comments from {}: {err}", path.display())
+            })?;
             json_string
         }
         None => "{}".to_string(),
@@ -57,9 +60,8 @@ fn parse_oxfmtrc(json_string: &str) -> Result<(FormatOptions, Value), String> {
     let oxfmtrc: Oxfmtrc = serde_json::from_value(raw_config.clone())
         .map_err(|err| format!("Failed to deserialize Oxfmtrc: {err}"))?;
 
-    let (format_options, _) = oxfmtrc
-        .into_options()
-        .map_err(|err| format!("Failed to parse configuration.\n{err}"))?;
+    let (format_options, _) =
+        oxfmtrc.into_options().map_err(|err| format!("Failed to parse configuration.\n{err}"))?;
 
     let mut external_options = raw_config;
     Oxfmtrc::populate_prettier_config(&format_options, &mut external_options);
@@ -125,17 +127,10 @@ mod tests {
     fn load_oxfmtrc_jsonc_with_comments() {
         let dir = tempdir().expect("tempdir");
         let config_path = dir.path().join(".oxfmtrc.jsonc");
-        fs::write(
-            &config_path,
-            "{\n// comment\n\"printWidth\": 120\n}\n",
-        )
-        .expect("write config");
+        fs::write(&config_path, "{\n// comment\n\"printWidth\": 120\n}\n").expect("write config");
 
         let (_, external_options) = load_oxfmtrc(dir.path()).expect("load config");
-        assert_eq!(
-            external_options.get("printWidth").and_then(Value::as_u64),
-            Some(120)
-        );
+        assert_eq!(external_options.get("printWidth").and_then(Value::as_u64), Some(120));
     }
 
     #[test]
@@ -146,9 +141,6 @@ mod tests {
 
         let (_, external_options) =
             load_oxfmtrc_from_path(Some(&config_path)).expect("load config");
-        assert_eq!(
-            external_options.get("printWidth").and_then(Value::as_u64),
-            Some(80)
-        );
+        assert_eq!(external_options.get("printWidth").and_then(Value::as_u64), Some(80));
     }
 }
