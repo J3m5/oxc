@@ -1,7 +1,15 @@
 use serde_json::Value;
 
 pub trait ExternalFormatterBridge: Send + Sync {
+    /// Initialize the external formatter.
+    ///
+    /// # Errors
+    /// Returns an error if the bridge fails to initialize.
     fn init(&self, num_threads: usize) -> Result<(), String>;
+    /// Format a file using the external formatter.
+    ///
+    /// # Errors
+    /// Returns an error if the bridge fails to format the provided code.
     fn format_file(
         &self,
         options: &Value,

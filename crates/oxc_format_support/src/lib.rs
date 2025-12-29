@@ -21,6 +21,12 @@ pub fn detect_prettier_file(path: &Path) -> Option<PrettierFileStrategy> {
     Some(PrettierFileStrategy::External { parser_name })
 }
 
+/// Load `.oxfmtrc.json`/`.oxfmtrc.jsonc` from `root` or its ancestors and return
+/// the resolved formatter options plus Prettier `external_options`.
+///
+/// # Errors
+/// Returns an error if the config file cannot be read, contains invalid JSONC,
+/// or fails to deserialize into `Oxfmtrc`.
 pub fn load_oxfmtrc(root: &Path) -> Result<(FormatOptions, Value), String> {
     let config_path = find_oxfmtrc(root);
 
