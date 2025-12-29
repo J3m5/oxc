@@ -15,6 +15,11 @@ pub fn detect_prettier_file(path: &Path) -> Option<PrettierFileStrategy> {
         "jsonc" => "jsonc",
         "css" => "css",
         "md" | "markdown" => "markdown",
+        "html" | "htm" | "hta" | "inc" | "xht" | "xhtml" => "html",
+        "yaml" | "yml" | "yaml-tmlanguage" | "sublime-syntax" | "syntax" | "mir" | "reek"
+        | "rviz" => "yaml",
+        "graphql" | "gql" | "graphqls" => "graphql",
+        "handlebars" | "hbs" => "glimmer",
         _ => return None,
     };
 
@@ -105,6 +110,25 @@ mod tests {
             ("file.css", "css"),
             ("file.md", "markdown"),
             ("file.markdown", "markdown"),
+            ("file.html", "html"),
+            ("file.htm", "html"),
+            ("file.hta", "html"),
+            ("file.inc", "html"),
+            ("file.xht", "html"),
+            ("file.xhtml", "html"),
+            ("file.yaml", "yaml"),
+            ("file.yml", "yaml"),
+            ("file.yaml-tmlanguage", "yaml"),
+            ("file.sublime-syntax", "yaml"),
+            ("file.syntax", "yaml"),
+            ("file.mir", "yaml"),
+            ("file.reek", "yaml"),
+            ("file.rviz", "yaml"),
+            ("file.graphql", "graphql"),
+            ("file.gql", "graphql"),
+            ("file.graphqls", "graphql"),
+            ("file.handlebars", "glimmer"),
+            ("file.hbs", "glimmer"),
         ];
 
         for (path, parser_name) in cases {
