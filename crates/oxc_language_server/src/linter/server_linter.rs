@@ -34,7 +34,7 @@ use crate::{
         isolated_lint_handler::{IsolatedLintHandler, IsolatedLintHandlerOptions},
         options::{LintOptions as LSPLintOptions, Run, UnusedDisableDirectives},
     },
-    tool::{DiagnosticResult, Tool, ToolBuilder, ToolRestartChanges, ToolShutdownChanges},
+    tool::{DiagnosticResult, Tool, ToolBuilder, ToolRestartChanges},
     utils::normalize_path,
 };
 
@@ -323,14 +323,11 @@ impl Tool for ServerLinter {
         "linter"
     }
 
-    fn shutdown(&self) -> ToolShutdownChanges {
-        ToolShutdownChanges { uris_to_clear_diagnostics: Some(self.get_cached_uris()) }
-    }
-
     /// # Panics
     /// Panics if the root URI cannot be converted to a file path.
     fn handle_configuration_change(
         &self,
+        builder: &dyn ToolBuilder,
         root_uri: &Uri,
         old_options_json: &serde_json::Value,
         new_options_json: serde_json::Value,
@@ -360,7 +357,7 @@ impl Tool for ServerLinter {
         }
 
         // get the cached files before refreshing the linter, and revalidate them after
-        let new_linter = ServerLinterBuilder::build(root_uri, new_options_json.clone());
+        let new_linter = builder.build_boxed(root_uri, new_options_json.clone());
 
         let patterns = {
             if old_option.config_path == new_options.config_path
@@ -373,7 +370,7 @@ impl Tool for ServerLinter {
             }
         };
 
-        ToolRestartChanges { tool: Some(Box::new(new_linter)), watch_patterns: patterns }
+        ToolRestartChanges { tool: Some(new_linter), watch_patterns: patterns }
     }
 
     fn get_watcher_patterns(&self, options: serde_json::Value) -> Vec<Pattern> {
@@ -412,15 +409,16 @@ impl Tool for ServerLinter {
 
     fn handle_watched_file_change(
         &self,
+        builder: &dyn ToolBuilder,
         _changed_uri: &Uri,
         root_uri: &Uri,
         options: serde_json::Value,
     ) -> ToolRestartChanges {
         // TODO: Check if the changed file is actually a config file (including extended paths)
-        let new_linter = ServerLinterBuilder::build(root_uri, options);
+        let new_linter = builder.build_boxed(root_uri, options);
 
         ToolRestartChanges {
-            tool: Some(Box::new(new_linter)),
+            tool: Some(new_linter),
             // TODO: update watch patterns if config_path changed, or the extended paths changed
             watch_patterns: None,
         }
@@ -517,9 +515,9 @@ impl Tool for ServerLinter {
     /// - If the file is not lintable or ignored, an empty vector is returned
     fn run_diagnostic(&self, uri: &Uri, content: Option<&str>) -> DiagnosticResult {
         let Some(diagnostics) = self.run_file(uri, content) else {
-            return vec![];
+            return Ok(vec![]);
         };
-        vec![(uri.clone(), diagnostics)]
+        Ok(vec![(uri.clone(), diagnostics)])
     }
 
     /// Lint a file with the current linter
@@ -527,7 +525,7 @@ impl Tool for ServerLinter {
     /// - If the linter is not set to `OnType`, an empty vector is returned
     fn run_diagnostic_on_change(&self, uri: &Uri, content: Option<&str>) -> DiagnosticResult {
         if self.run != Run::OnType {
-            return vec![];
+            return Ok(vec![]);
         }
         self.run_diagnostic(uri, content)
     }
@@ -537,7 +535,7 @@ impl Tool for ServerLinter {
     /// - If the linter is not set to `OnSave`, an empty vector is returned
     fn run_diagnostic_on_save(&self, uri: &Uri, content: Option<&str>) -> DiagnosticResult {
         if self.run != Run::OnSave {
-            return vec![];
+            return Ok(vec![]);
         }
         self.run_diagnostic(uri, content)
     }
@@ -567,10 +565,6 @@ impl ServerLinter {
             extended_paths,
             code_actions: Arc::new(ConcurrentHashMap::default()),
         }
-    }
-
-    fn get_cached_uris(&self) -> Vec<Uri> {
-        self.code_actions.pin().keys().cloned().collect()
     }
 
     fn get_code_actions_for_uri(&self, uri: &Uri) -> Option<Vec<LinterCodeAction>> {

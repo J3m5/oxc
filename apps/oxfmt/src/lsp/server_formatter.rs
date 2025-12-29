@@ -13,12 +13,12 @@ use oxc_parser::Parser;
 use serde_json::Value;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
-use crate::{
-    capabilities::Capabilities,
-    formatter::{ExternalFormatterBridge, FORMAT_CONFIG_FILES, options::FormatOptions as LSPFormatOptions},
-    tool::{Tool, ToolBuilder, ToolRestartChanges},
-    utils::normalize_path,
+use crate::lsp::{
+    external_formatter_bridge::ExternalFormatterBridge,
+    options::FormatOptions as LSPFormatOptions,
+    FORMAT_CONFIG_FILES,
 };
+use oxc_language_server::{Capabilities, Tool, ToolBuilder, ToolRestartChanges, utils::normalize_path};
 
 #[cfg(feature = "lsp-prettier")]
 use oxc_format_support::{PrettierFileStrategy, detect_prettier_file, load_oxfmtrc};
@@ -228,6 +228,7 @@ impl Tool for ServerFormatter {
     /// Panics if the root URI cannot be converted to a file path.
     fn handle_configuration_change(
         &self,
+        builder: &dyn ToolBuilder,
         root_uri: &Uri,
         old_options_json: &serde_json::Value,
         new_options_json: serde_json::Value,
@@ -258,16 +259,9 @@ impl Tool for ServerFormatter {
             return ToolRestartChanges { tool: None, watch_patterns: None };
         }
 
-        let new_formatter = ServerFormatterBuilder::build(
-            root_uri,
-            new_options_json.clone(),
-            self.external_bridge.clone(),
-        );
+        let new_formatter = builder.build_boxed(root_uri, new_options_json.clone());
         let watch_patterns = new_formatter.get_watcher_patterns(new_options_json);
-        ToolRestartChanges {
-            tool: Some(Box::new(new_formatter)),
-            watch_patterns: Some(watch_patterns),
-        }
+        ToolRestartChanges { tool: Some(new_formatter), watch_patterns: Some(watch_patterns) }
     }
 
     fn get_watcher_patterns(&self, options: serde_json::Value) -> Vec<Pattern> {
@@ -290,17 +284,17 @@ impl Tool for ServerFormatter {
 
     fn handle_watched_file_change(
         &self,
+        builder: &dyn ToolBuilder,
         _changed_uri: &Uri,
         root_uri: &Uri,
         options: serde_json::Value,
     ) -> ToolRestartChanges {
         // TODO: Check if the changed file is actually a config file
 
-        let new_formatter =
-            ServerFormatterBuilder::build(root_uri, options, self.external_bridge.clone());
+        let new_formatter = builder.build_boxed(root_uri, options);
 
         ToolRestartChanges {
-            tool: Some(Box::new(new_formatter)),
+            tool: Some(new_formatter),
             // TODO: update watch patterns if config_path changed
             watch_patterns: None,
         }
@@ -489,7 +483,8 @@ fn load_ignore_paths(cwd: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests_builder {
-    use crate::{ServerFormatterBuilder, ToolBuilder, capabilities::Capabilities};
+    use crate::lsp::server_formatter::ServerFormatterBuilder;
+    use oxc_language_server::{Capabilities, ToolBuilder};
 
     #[test]
     fn test_server_capabilities() {
@@ -511,7 +506,7 @@ mod test_watchers {
     const FAKE_DIR: &str = "fixtures/formatter/watchers";
 
     mod init_watchers {
-        use crate::formatter::{server_formatter::test_watchers::FAKE_DIR, tester::Tester};
+        use crate::lsp::{server_formatter::test_watchers::FAKE_DIR, tester::Tester};
         use serde_json::json;
 
         #[test]
@@ -551,10 +546,8 @@ mod test_watchers {
     }
 
     mod handle_configuration_change {
-        use crate::{
-            ToolRestartChanges,
-            formatter::{server_formatter::test_watchers::FAKE_DIR, tester::Tester},
-        };
+        use crate::lsp::{server_formatter::test_watchers::FAKE_DIR, tester::Tester};
+        use oxc_language_server::ToolRestartChanges;
         use serde_json::json;
 
         #[test]
@@ -584,9 +577,8 @@ mod tests {
     use serde_json::json;
 
     use super::compute_minimal_text_edit;
-    use crate::formatter::tester::{Tester, get_file_uri};
-    use crate::tool::Tool;
-    use crate::ServerFormatterBuilder;
+    use crate::lsp::tester::{Tester, get_file_uri};
+    use oxc_language_server::Tool;
 
     #[test]
     #[should_panic(expected = "assertion failed")]
@@ -672,7 +664,7 @@ mod tests {
     #[test]
     fn test_formatter() {
         Tester::new(
-            "fixtures/formatter/basic",
+            "test/fixtures/lsp/basic",
             json!({
                 "fmt.experimental": true
             }),
@@ -683,7 +675,7 @@ mod tests {
     #[test]
     fn test_root_config_detection() {
         Tester::new(
-            "fixtures/formatter/root_config",
+            "test/fixtures/lsp/root_config",
             json!({
                 "fmt.experimental": true
             }),
@@ -694,7 +686,7 @@ mod tests {
     #[test]
     fn test_custom_config_path() {
         Tester::new(
-            "fixtures/formatter/custom_config_path",
+            "test/fixtures/lsp/custom_config_path",
             json!({
                 "fmt.experimental": true,
                 "fmt.configPath": "./format.json",
@@ -706,7 +698,7 @@ mod tests {
     #[test]
     fn test_ignore_files() {
         Tester::new(
-            "fixtures/formatter/ignore-file",
+            "test/fixtures/lsp/ignore-file",
             json!({
                 "fmt.experimental": true
             }),
@@ -717,7 +709,7 @@ mod tests {
     #[test]
     fn test_ignore_pattern() {
         Tester::new(
-            "fixtures/formatter/ignore-pattern",
+            "test/fixtures/lsp/ignore-pattern",
             json!({
                 "fmt.experimental": true
             }),
@@ -727,10 +719,13 @@ mod tests {
 
     #[test]
     fn test_prettier_only_without_bridge() {
-        let root_uri = Tester::get_root_uri("fixtures/formatter/prettier_only");
+        let root_uri = Tester::get_root_uri("test/fixtures/lsp/prettier_only");
         let formatter = ServerFormatterBuilder::build(&root_uri, json!({}), None);
-        let uri = get_file_uri("fixtures/formatter/prettier_only/sample.json");
-        let formatted = formatter.run_format(&uri, None);
-        assert!(formatted.is_none());
+        let files = ["sample.json", "sample.html"];
+        for file in files {
+            let uri = get_file_uri(&format!("test/fixtures/lsp/prettier_only/{file}"));
+            let formatted = formatter.run_format(&uri, None);
+            assert!(formatted.is_none(), "{file} should be skipped without bridge");
+        }
     }
 }

@@ -1,12 +1,20 @@
 use std::sync::Arc;
 
-use oxc_language_server::{ExternalFormatterBridge, ServerFormatterBuilder, run_server};
+use oxc_language_server::run_server;
 use serde_json::Value;
 use tokio::task::block_in_place;
 
-use crate::core::{
-    ExternalFormatter, JsFormatEmbeddedCb, JsFormatFileCb, JsInitExternalFormatterCb,
-};
+use crate::core::{ExternalFormatter, JsFormatEmbeddedCb, JsFormatFileCb, JsInitExternalFormatterCb};
+
+mod external_formatter_bridge;
+mod options;
+mod server_formatter;
+#[cfg(test)]
+mod tester;
+
+const FORMAT_CONFIG_FILES: &[&str; 2] = &[".oxfmtrc.json", ".oxfmtrc.jsonc"];
+
+use external_formatter_bridge::ExternalFormatterBridge;
 
 struct NapiExternalFormatterBridge {
     formatter: ExternalFormatter,
@@ -41,7 +49,9 @@ pub async fn run_lsp(
     run_server(
         "oxfmt".to_string(),
         env!("CARGO_PKG_VERSION").to_string(),
-        vec![Box::new(ServerFormatterBuilder::new(Some(bridge)))],
+        vec![Box::new(server_formatter::ServerFormatterBuilder::new(Some(
+            bridge,
+        )))],
     )
     .await;
 }
