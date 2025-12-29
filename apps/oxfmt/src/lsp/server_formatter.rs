@@ -10,6 +10,7 @@ use oxc_formatter::{
     oxfmtrc::{OxfmtOptions, Oxfmtrc},
 };
 use oxc_parser::Parser;
+#[cfg(feature = "lsp-prettier")]
 use serde_json::Value;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
@@ -67,10 +68,17 @@ impl ServerFormatterBuilder {
                 }
             };
 
-        let (external_options, external_bridge) =
-            Self::resolve_external_options(&root_path, external_bridge);
+        #[cfg(feature = "lsp-prettier")]
+        {
+            let (external_options, external_bridge) =
+                Self::resolve_external_options(&root_path, external_bridge);
+            ServerFormatter::new(format_options, gitignore_glob, external_options, external_bridge)
+        }
 
-        ServerFormatter::new(format_options, gitignore_glob, external_options, external_bridge)
+        #[cfg(not(feature = "lsp-prettier"))]
+        {
+            ServerFormatter::new(format_options, gitignore_glob, external_bridge)
+        }
     }
 }
 
@@ -178,44 +186,37 @@ impl ServerFormatterBuilder {
         builder.build().map_err(|_| "Failed to build ignore globs".to_string())
     }
 
+    #[cfg(feature = "lsp-prettier")]
     fn resolve_external_options(
-        _root_path: &Path,
+        root_path: &Path,
         external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
     ) -> (Value, Option<Arc<dyn ExternalFormatterBridge>>) {
-        #[cfg(feature = "lsp-prettier")]
-        {
-            let mut external_options = Value::Object(serde_json::Map::new());
-            let mut external_bridge = external_bridge;
+        let mut external_options = Value::Object(serde_json::Map::new());
+        let mut external_bridge = external_bridge;
 
-            match load_oxfmtrc(_root_path) {
-                Ok((_, options)) => {
-                    external_options = options;
-                }
-                Err(err) => {
-                    debug!("Failed to load .oxfmtrc for external formatter: {err}");
-                }
+        match load_oxfmtrc(root_path) {
+            Ok((_, options)) => {
+                external_options = options;
             }
-
-            if let Some(bridge) = external_bridge.as_ref() {
-                if let Err(err) = bridge.init(1) {
-                    debug!("Failed to initialize external formatter bridge: {err}");
-                    external_bridge = None;
-                }
+            Err(err) => {
+                debug!("Failed to load .oxfmtrc for external formatter: {err}");
             }
-
-            return (external_options, external_bridge);
         }
 
-        #[cfg(not(feature = "lsp-prettier"))]
+        if let Some(bridge) = external_bridge.as_ref()
+            && let Err(err) = bridge.init(1)
         {
-            (Value::Object(serde_json::Map::new()), external_bridge)
+            debug!("Failed to initialize external formatter bridge: {err}");
+            external_bridge = None;
         }
+
+        (external_options, external_bridge)
     }
 }
 pub struct ServerFormatter {
     options: FormatOptions,
     gitignore_glob: Option<Gitignore>,
-    #[cfg_attr(not(feature = "lsp-prettier"), allow(dead_code))]
+    #[cfg(feature = "lsp-prettier")]
     external_options: Value,
     external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
 }
@@ -407,6 +408,7 @@ impl Tool for ServerFormatter {
 }
 
 impl ServerFormatter {
+    #[cfg(feature = "lsp-prettier")]
     pub fn new(
         options: FormatOptions,
         gitignore_glob: Option<Gitignore>,
@@ -414,6 +416,15 @@ impl ServerFormatter {
         external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
     ) -> Self {
         Self { options, gitignore_glob, external_options, external_bridge }
+    }
+
+    #[cfg(not(feature = "lsp-prettier"))]
+    pub fn new(
+        options: FormatOptions,
+        gitignore_glob: Option<Gitignore>,
+        external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
+    ) -> Self {
+        Self { options, gitignore_glob, external_bridge }
     }
 
     fn is_ignored(&self, path: &Path) -> bool {
