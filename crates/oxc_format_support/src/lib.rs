@@ -29,8 +29,13 @@ pub fn detect_prettier_file(path: &Path) -> Option<PrettierFileStrategy> {
 /// or fails to deserialize into `Oxfmtrc`.
 pub fn load_oxfmtrc(root: &Path) -> Result<(FormatOptions, Value), String> {
     let config_path = find_oxfmtrc(root);
+    load_oxfmtrc_from_path(config_path.as_deref())
+}
 
-    let json_string = match &config_path {
+/// Load an `.oxfmtrc.json`/`.oxfmtrc.jsonc` from an explicit path and return
+/// the resolved formatter options plus Prettier `external_options`.
+pub fn load_oxfmtrc_from_path(config_path: Option<&Path>) -> Result<(FormatOptions, Value), String> {
+    let json_string = match config_path {
         Some(path) => {
             let mut json_string = std::fs::read_to_string(path)
                 // Do not include OS error, it differs between platforms
@@ -42,7 +47,11 @@ pub fn load_oxfmtrc(root: &Path) -> Result<(FormatOptions, Value), String> {
         None => "{}".to_string(),
     };
 
-    let raw_config: Value = serde_json::from_str(&json_string)
+    parse_oxfmtrc(&json_string)
+}
+
+fn parse_oxfmtrc(json_string: &str) -> Result<(FormatOptions, Value), String> {
+    let raw_config: Value = serde_json::from_str(json_string)
         .map_err(|err| format!("Failed to parse config: {err}"))?;
 
     let oxfmtrc: Oxfmtrc = serde_json::from_value(raw_config.clone())
@@ -80,7 +89,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
-    use super::{detect_prettier_file, load_oxfmtrc};
+    use super::{detect_prettier_file, load_oxfmtrc, load_oxfmtrc_from_path};
 
     #[test]
     fn detect_prettier_file_extensions() {
@@ -126,6 +135,20 @@ mod tests {
         assert_eq!(
             external_options.get("printWidth").and_then(Value::as_u64),
             Some(120)
+        );
+    }
+
+    #[test]
+    fn load_oxfmtrc_from_path_uses_custom_config() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("custom.json");
+        fs::write(&config_path, "{\n\"printWidth\": 80\n}\n").expect("write config");
+
+        let (_, external_options) =
+            load_oxfmtrc_from_path(Some(&config_path)).expect("load config");
+        assert_eq!(
+            external_options.get("printWidth").and_then(Value::as_u64),
+            Some(80)
         );
     }
 }

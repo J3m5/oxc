@@ -22,7 +22,9 @@ use crate::lsp::{
 use oxc_language_server::{Capabilities, Tool, ToolBuilder, ToolRestartChanges, utils::normalize_path};
 
 #[cfg(feature = "lsp-prettier")]
-use oxc_format_support::{PrettierFileStrategy, detect_prettier_file, load_oxfmtrc};
+use oxc_format_support::{
+    PrettierFileStrategy, detect_prettier_file, load_oxfmtrc_from_path,
+};
 
 #[derive(Clone, Default)]
 pub struct ServerFormatterBuilder {
@@ -70,8 +72,11 @@ impl ServerFormatterBuilder {
 
         #[cfg(feature = "lsp-prettier")]
         {
-            let (external_options, external_bridge) =
-                Self::resolve_external_options(&root_path, external_bridge);
+            let (external_options, external_bridge) = Self::resolve_external_options(
+                &root_path,
+                options.config_path.as_ref(),
+                external_bridge,
+            );
             ServerFormatter::new(format_options, gitignore_glob, external_options, external_bridge)
         }
 
@@ -189,17 +194,19 @@ impl ServerFormatterBuilder {
     #[cfg(feature = "lsp-prettier")]
     fn resolve_external_options(
         root_path: &Path,
+        config_path: Option<&String>,
         external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
     ) -> (Value, Option<Arc<dyn ExternalFormatterBridge>>) {
         let mut external_options = Value::Object(serde_json::Map::new());
         let mut external_bridge = external_bridge;
 
-        match load_oxfmtrc(root_path) {
+        let config_path = Self::search_config_file(root_path, config_path);
+        match load_oxfmtrc_from_path(config_path.as_deref()) {
             Ok((_, options)) => {
                 external_options = options;
             }
             Err(err) => {
-                debug!("Failed to load .oxfmtrc for external formatter: {err}");
+                debug!("Failed to load formatter config for external formatter: {err}");
             }
         }
 
