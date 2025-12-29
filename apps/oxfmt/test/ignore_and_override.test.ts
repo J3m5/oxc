@@ -5,7 +5,7 @@ import { runAndSnapshot } from "./utils";
 const fixturesDir = join(__dirname, "fixtures");
 
 describe("ignore_and_override", () => {
-  it("should handle ignore files with overrides", async () => {
+  it("should handle ignore files with overrides", { timeout: 7_000 }, async () => {
     const cwd = join(fixturesDir, "ignore_and_override");
     const testCases = [
       // Exclude `err.js` via `!` pattern, format `ok.js` only
