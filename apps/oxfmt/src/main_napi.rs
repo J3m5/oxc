@@ -10,7 +10,8 @@ use crate::{
     cli::{FormatRunner, Mode, format_command, init_miette, init_rayon, init_tracing},
     core::{
         ConfigResolver, ExternalFormatter, FormatFileStrategy, FormatResult as CoreFormatResult,
-        JsFormatEmbeddedCb, JsFormatFileCb, JsInitExternalFormatterCb, SourceFormatter,
+        JsCreateWorkspaceCb, JsDeleteWorkspaceCb, JsFormatEmbeddedCb, JsFormatFileCb,
+        JsInitExternalFormatterCb, SourceFormatter,
     },
     lsp::run_lsp,
     stdin::StdinRunner,
@@ -24,6 +25,8 @@ use crate::{
 /// 2. `init_external_formatter_cb`: Callback to initialize external formatter
 /// 3. `format_embedded_cb`: Callback to format embedded code in templates
 /// 4. `format_file_cb`: Callback to format files
+/// 5. `create_workspace_cb`: Callback to create an external formatter workspace
+/// 6. `delete_workspace_cb`: Callback to delete an external formatter workspace
 ///
 /// Returns a tuple of `[mode, exitCode]`:
 /// - `mode`: If main logic will run in JS side, use this to indicate which mode
@@ -40,9 +43,13 @@ pub async fn run_cli(
     )]
     format_embedded_cb: JsFormatEmbeddedCb,
     #[napi(
-        ts_arg_type = "(options: Record<string, any>, parserName: string, fileName: string, code: string) => Promise<string>"
+        ts_arg_type = "(workspaceId: number, options: Record<string, any>, parserName: string, fileName: string, code: string) => Promise<string>"
     )]
     format_file_cb: JsFormatFileCb,
+    #[napi(ts_arg_type = "(directory: string) => Promise<number>")]
+    create_workspace_cb: JsCreateWorkspaceCb,
+    #[napi(ts_arg_type = "(workspaceId: number) => Promise<void>")]
+    delete_workspace_cb: JsDeleteWorkspaceCb,
 ) -> (String, Option<u8>) {
     // Convert String args to OsString for compatibility with bpaf
     let args: Vec<OsString> = args.into_iter().map(OsString::from).collect();
@@ -62,7 +69,14 @@ pub async fn run_cli(
         Mode::Init => ("init".to_string(), None),
         Mode::Migrate(_) => ("migrate:prettier".to_string(), None),
         Mode::Lsp => {
-            run_lsp(init_external_formatter_cb, format_embedded_cb, format_file_cb).await;
+            run_lsp(
+                init_external_formatter_cb,
+                format_embedded_cb,
+                format_file_cb,
+                create_workspace_cb,
+                delete_workspace_cb,
+            )
+            .await;
             ("lsp".to_string(), Some(0))
         }
         Mode::Stdin(_) => {
@@ -75,6 +89,8 @@ pub async fn run_cli(
                     init_external_formatter_cb,
                     format_embedded_cb,
                     format_file_cb,
+                    create_workspace_cb,
+                    delete_workspace_cb,
                 )))
                 .run();
 
@@ -91,6 +107,8 @@ pub async fn run_cli(
                     init_external_formatter_cb,
                     format_embedded_cb,
                     format_file_cb,
+                    create_workspace_cb,
+                    delete_workspace_cb,
                 )))
                 .run();
 
@@ -126,14 +144,23 @@ pub async fn format(
     )]
     format_embedded_cb: JsFormatEmbeddedCb,
     #[napi(
-        ts_arg_type = "(options: Record<string, any>, parserName: string, fileName: string, code: string) => Promise<string>"
+        ts_arg_type = "(workspaceId: number, options: Record<string, any>, parserName: string, fileName: string, code: string) => Promise<string>"
     )]
     format_file_cb: JsFormatFileCb,
+    #[napi(ts_arg_type = "(directory: string) => Promise<number>")]
+    create_workspace_cb: JsCreateWorkspaceCb,
+    #[napi(ts_arg_type = "(workspaceId: number) => Promise<void>")]
+    delete_workspace_cb: JsDeleteWorkspaceCb,
 ) -> FormatResult {
     let num_of_threads = 1;
 
-    let external_formatter =
-        ExternalFormatter::new(init_external_formatter_cb, format_embedded_cb, format_file_cb);
+    let external_formatter = ExternalFormatter::new(
+        init_external_formatter_cb,
+        format_embedded_cb,
+        format_file_cb,
+        create_workspace_cb,
+        delete_workspace_cb,
+    );
 
     // Create resolver from options and resolve format options
     let mut config_resolver = ConfigResolver::from_value(options.unwrap_or_default());

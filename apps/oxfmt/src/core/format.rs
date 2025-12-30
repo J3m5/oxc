@@ -208,7 +208,7 @@ impl SourceFormatter {
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
         external_formatter
-            .format_file(&external_options, parser_name, file_name, source_text)
+            .format_file(0, &external_options, parser_name, file_name, source_text)
             .map_err(|err| {
                 OxcDiagnostic::error(format!(
                     "Failed to format file with external formatter: {}\n{err}",
