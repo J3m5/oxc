@@ -76,12 +76,14 @@ suite('E2E Server Formatter', () => {
       const expectedJson = "{ \"a\": 1, \"b\": [1, 2] }\n";
       const expectedCss = ".foo {\n  color: red;\n}\n";
       const expectedMarkdown = "# Title\n\n- a\n- b\n";
+      const expectedHtml = "<div>\n  <span>Hi</span>\n</div>\n";
 
       const cases: Array<[string, string]> = [
         ["prettier.json", expectedJson],
         ["prettier.jsonc", expectedJson],
         ["prettier.css", expectedCss],
         ["prettier.md", expectedMarkdown],
+        ["prettier.html", expectedHtml],
       ];
 
       // oxlint-disable eslint/no-await-in-loop -- VS Code formatting must be run sequentially per file.

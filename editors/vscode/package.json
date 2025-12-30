@@ -286,6 +286,9 @@
   "activationEvents": [
     "onLanguage:astro",
     "onLanguage:css",
+    "onLanguage:graphql",
+    "onLanguage:handlebars",
+    "onLanguage:html",
     "onLanguage:javascript",
     "onLanguage:javascriptreact",
     "onLanguage:json",
@@ -294,6 +297,7 @@
     "onLanguage:svelte",
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
+    "onLanguage:yaml",
     "onLanguage:vue"
   ],
   "icon": "icon.png",
