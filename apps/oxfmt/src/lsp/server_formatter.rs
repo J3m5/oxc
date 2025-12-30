@@ -14,11 +14,12 @@ use serde_json::Value;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
 use crate::lsp::{
-    external_formatter_bridge::ExternalFormatterBridge,
+    FORMAT_CONFIG_FILES, external_formatter_bridge::ExternalFormatterBridge,
     options::FormatOptions as LSPFormatOptions,
-    FORMAT_CONFIG_FILES,
 };
-use oxc_language_server::{Capabilities, Tool, ToolBuilder, ToolRestartChanges, utils::normalize_path};
+use oxc_language_server::{
+    Capabilities, Tool, ToolBuilder, ToolRestartChanges, utils::normalize_path,
+};
 
 #[cfg(feature = "lsp-prettier")]
 use oxc_format_support::{PrettierFileStrategy, detect_prettier_file, load_oxfmtrc_from_path};

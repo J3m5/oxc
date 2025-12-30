@@ -297,8 +297,8 @@
     "onLanguage:svelte",
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
-    "onLanguage:yaml",
-    "onLanguage:vue"
+    "onLanguage:vue",
+    "onLanguage:yaml"
   ],
   "icon": "icon.png",
   "engines": {

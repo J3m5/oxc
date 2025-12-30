@@ -4,7 +4,9 @@ use oxc_language_server::run_server;
 use serde_json::Value;
 use tokio::task::block_in_place;
 
-use crate::core::{ExternalFormatter, JsFormatEmbeddedCb, JsFormatFileCb, JsInitExternalFormatterCb};
+use crate::core::{
+    ExternalFormatter, JsFormatEmbeddedCb, JsFormatFileCb, JsInitExternalFormatterCb,
+};
 
 mod external_formatter_bridge;
 mod options;
@@ -49,9 +51,7 @@ pub async fn run_lsp(
     run_server(
         "oxfmt".to_string(),
         env!("CARGO_PKG_VERSION").to_string(),
-        vec![Box::new(server_formatter::ServerFormatterBuilder::new(Some(
-            bridge,
-        )))],
+        vec![Box::new(server_formatter::ServerFormatterBuilder::new(Some(bridge)))],
     )
     .await;
 }
