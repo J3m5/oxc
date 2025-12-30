@@ -10,6 +10,10 @@ import type { Options } from "prettier";
 // Anyway, we keep lazy loading for now to minimize initial load time.
 let prettierCache: typeof import("prettier");
 
+function normalizePrettier(prettier: typeof import("prettier")): typeof import("prettier") {
+  return (prettier as { default?: typeof import("prettier") }).default ?? prettier;
+}
+
 type Workspace = {
   id: number;
   root: string;
@@ -21,7 +25,7 @@ let nextWorkspaceId = 1;
 
 async function loadPrettierDefault(): Promise<typeof import("prettier")> {
   if (!prettierCache) {
-    prettierCache = await import("prettier");
+    prettierCache = normalizePrettier(await import("prettier"));
   }
   return prettierCache;
 }
@@ -30,7 +34,7 @@ async function loadPrettierForRoot(root: string): Promise<typeof import("prettie
   try {
     const requireFromRoot = createRequire(path.join(root, "package.json"));
     const prettierPath = requireFromRoot.resolve("prettier");
-    return import(pathToFileURL(prettierPath).href);
+    return normalizePrettier(await import(pathToFileURL(prettierPath).href));
   } catch {
     return loadPrettierDefault();
   }
@@ -116,7 +120,7 @@ export async function formatEmbeddedCode({
   if (!parserName) return code;
 
   if (!prettierCache) {
-    prettierCache = await import("prettier");
+    prettierCache = normalizePrettier(await import("prettier"));
   }
 
   // SAFETY: `options` is created in Rust side, so it's safe to mutate here

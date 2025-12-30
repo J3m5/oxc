@@ -76,7 +76,7 @@ suite('E2E Server Formatter', () => {
       const expectedJson = "{ \"a\": 1, \"b\": [1, 2] }\n";
       const expectedCss = ".foo {\n  color: red;\n}\n";
       const expectedMarkdown = "# Title\n\n- a\n- b\n";
-      const expectedHtml = "<div>\n  <span>Hi</span>\n</div>\n";
+      const expectedHtml = "<div><span>Hi</span></div>\n";
 
       const cases: Array<[string, string]> = [
         ["prettier.json", expectedJson],
