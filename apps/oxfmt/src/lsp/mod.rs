@@ -5,8 +5,8 @@ use serde_json::Value;
 use tokio::task::block_in_place;
 
 use crate::core::{
-    ExternalFormatter, JsCreateWorkspaceCb, JsDeleteWorkspaceCb, JsFormatEmbeddedCb, JsFormatFileCb,
-    JsInitExternalFormatterCb,
+    ExternalFormatter, JsCreateWorkspaceCb, JsDeleteWorkspaceCb, JsFormatEmbeddedCb,
+    JsFormatFileCb, JsInitExternalFormatterCb,
 };
 
 mod external_formatter_bridge;
@@ -32,10 +32,7 @@ impl ExternalFormatterBridge for NapiExternalFormatterBridge {
         &self,
         root: &std::path::Path,
     ) -> Result<external_formatter_bridge::WorkspaceHandle, String> {
-        block_in_place(|| {
-            self.formatter
-                .create_workspace(root.to_string_lossy().as_ref())
-        })
+        block_in_place(|| self.formatter.create_workspace(root.to_string_lossy().as_ref()))
     }
 
     fn delete_workspace(
@@ -65,14 +62,13 @@ pub async fn run_lsp(
     create_workspace_cb: JsCreateWorkspaceCb,
     delete_workspace_cb: JsDeleteWorkspaceCb,
 ) {
-    let external_formatter =
-        ExternalFormatter::new(
-            init_external_formatter_cb,
-            format_embedded_cb,
-            format_file_cb,
-            create_workspace_cb,
-            delete_workspace_cb,
-        );
+    let external_formatter = ExternalFormatter::new(
+        init_external_formatter_cb,
+        format_embedded_cb,
+        format_file_cb,
+        create_workspace_cb,
+        delete_workspace_cb,
+    );
     let bridge = Arc::new(NapiExternalFormatterBridge { formatter: external_formatter });
 
     run_server(

@@ -1,9 +1,6 @@
 import Tinypool from "tinypool";
 import { resolvePlugins } from "../libs/prettier";
-import type {
-  FormatEmbeddedCodeParam,
-  FormatFileParam,
-} from "../libs/prettier";
+import type { FormatEmbeddedCodeParam, FormatFileParam } from "../libs/prettier";
 import type { Options } from "prettier";
 
 // Worker pool for parallel Prettier formatting
@@ -36,10 +33,9 @@ export async function formatFile(
   fileName: string,
   code: string,
 ): Promise<string> {
-  return pool!.run(
-    { workspaceId, options, code, fileName, parserName } satisfies FormatFileParam,
-    { name: "formatFile" },
-  );
+  return pool!.run({ workspaceId, options, code, fileName, parserName } satisfies FormatFileParam, {
+    name: "formatFile",
+  });
 }
 
 export async function createWorkspace(directory: string): Promise<number> {

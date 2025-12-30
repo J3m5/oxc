@@ -244,7 +244,11 @@ fn wrap_format_embedded(cb: JsFormatEmbeddedCb) -> FormatEmbeddedWithConfigCallb
 /// Wrap JS `formatFile` callback as a normal Rust function.
 fn wrap_format_file(cb: JsFormatFileCb) -> FormatFileWithConfigCallback {
     Arc::new(
-        move |workspace_id: u32, options: &Value, parser_name: &str, file_name: &str, code: &str| {
+        move |workspace_id: u32,
+              options: &Value,
+              parser_name: &str,
+              file_name: &str,
+              code: &str| {
             block_on(async {
                 let status = cb
                     .call_async(FnArgs::from((

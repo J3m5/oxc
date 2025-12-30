@@ -10,14 +10,11 @@ use oxc_formatter::{Formatter, enable_jsx_source_type, get_parse_options};
 use oxc_parser::Parser;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
-use crate::lsp::{
-    FORMAT_CONFIG_FILES,
-    external_formatter_bridge::ExternalFormatterBridge,
-    options::FormatOptions as LSPFormatOptions,
-};
+use crate::core::{ConfigResolver, FormatFileStrategy, ResolvedOptions, resolve_editorconfig_path};
 use crate::lsp::external_formatter_bridge::WorkspaceHandle;
-use crate::core::{
-    ConfigResolver, FormatFileStrategy, ResolvedOptions, resolve_editorconfig_path,
+use crate::lsp::{
+    FORMAT_CONFIG_FILES, external_formatter_bridge::ExternalFormatterBridge,
+    options::FormatOptions as LSPFormatOptions,
 };
 use oxc_language_server::{Capabilities, Tool, ToolBuilder, ToolRestartChanges};
 
@@ -57,14 +54,12 @@ impl ServerFormatterBuilder {
             Self::resolve_config(&root_path, options.config_path.as_ref());
 
         let gitignore_glob = match Self::create_ignore_globs(&root_path, &ignore_patterns) {
-                Ok(glob) => Some(glob),
-                Err(err) => {
-                    warn!(
-                        "Failed to create gitignore globs: {err}, proceeding without ignore globs"
-                    );
-                    None
-                }
-            };
+            Ok(glob) => Some(glob),
+            Err(err) => {
+                warn!("Failed to create gitignore globs: {err}, proceeding without ignore globs");
+                None
+            }
+        };
 
         let (external_bridge, workspace_handle) =
             Self::init_external_formatter(&root_path, external_bridge);
@@ -94,19 +89,18 @@ impl ServerFormatterBuilder {
         let oxfmtrc_path = Self::find_config_path(root_path, config_path);
 
         let editorconfig_path = resolve_editorconfig_path(root_path);
-        let mut config_resolver =
-            match ConfigResolver::from_config_paths(
-                root_path,
-                oxfmtrc_path.as_deref(),
-                editorconfig_path.as_deref(),
-            ) {
-                Ok(resolver) => resolver,
-                Err(err) => {
-                    warn!("Failed to load configuration file: {err}, using default config");
-                    ConfigResolver::from_config_paths(root_path, None, None)
-                        .expect("default config should always load")
-                }
-            };
+        let mut config_resolver = match ConfigResolver::from_config_paths(
+            root_path,
+            oxfmtrc_path.as_deref(),
+            editorconfig_path.as_deref(),
+        ) {
+            Ok(resolver) => resolver,
+            Err(err) => {
+                warn!("Failed to load configuration file: {err}, using default config");
+                ConfigResolver::from_config_paths(root_path, None, None)
+                    .expect("default config should always load")
+            }
+        };
 
         let ignore_patterns = match config_resolver.build_and_validate() {
             Ok(patterns) => patterns,
@@ -309,11 +303,8 @@ impl Tool for ServerFormatter {
         let strategy = FormatFileStrategy::try_from(path.clone()).ok()?;
         match strategy {
             FormatFileStrategy::OxcFormatter { source_type, .. } => {
-                let ResolvedOptions::OxcFormatter {
-                    format_options,
-                    insert_final_newline,
-                    ..
-                } = self.config_resolver.resolve(&strategy)
+                let ResolvedOptions::OxcFormatter { format_options, insert_final_newline, .. } =
+                    self.config_resolver.resolve(&strategy)
                 else {
                     return None;
                 };
@@ -348,10 +339,8 @@ impl Tool for ServerFormatter {
                     return None;
                 };
 
-                let ResolvedOptions::ExternalFormatter {
-                    external_options,
-                    insert_final_newline,
-                } = self.config_resolver.resolve(&strategy)
+                let ResolvedOptions::ExternalFormatter { external_options, insert_final_newline } =
+                    self.config_resolver.resolve(&strategy)
                 else {
                     return None;
                 };
@@ -401,8 +390,7 @@ impl Tool for ServerFormatter {
 
                 let source_text = if sort_package_json {
                     let options = SortOptions { sort_scripts: false, pretty: false };
-                    match sort_package_json::sort_package_json_with_options(source_text, &options)
-                    {
+                    match sort_package_json::sort_package_json_with_options(source_text, &options) {
                         Ok(sorted) => Cow::Owned(sorted),
                         Err(err) => {
                             debug!("Failed to sort package.json {}: {err}", path.display());
@@ -645,8 +633,8 @@ mod test_watchers {
 mod tests {
     use serde_json::json;
 
-    use crate::lsp::server_formatter::ServerFormatterBuilder;
     use super::compute_minimal_text_edit;
+    use crate::lsp::server_formatter::ServerFormatterBuilder;
     use crate::lsp::tester::{Tester, get_file_uri};
     use oxc_language_server::Tool;
 
