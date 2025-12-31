@@ -1,4 +1,4 @@
 // `oxfmt` CLI - Worker Thread Entry Point
 
 // Re-exports core functions for use in `worker_threads`
-export { formatEmbeddedCode, formatFile } from "./libs/prettier";
+export { createWorkspace, deleteWorkspace, formatEmbeddedCode, formatFile } from "./libs/prettier";

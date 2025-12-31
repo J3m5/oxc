@@ -27,12 +27,21 @@ export async function formatEmbeddedCode(
 }
 
 export async function formatFile(
+  workspaceId: number,
   options: Options,
   parserName: string,
   fileName: string,
   code: string,
 ): Promise<string> {
-  return pool!.run({ options, code, fileName, parserName } satisfies FormatFileParam, {
+  return pool!.run({ workspaceId, options, code, fileName, parserName } satisfies FormatFileParam, {
     name: "formatFile",
   });
+}
+
+export async function createWorkspace(directory: string): Promise<number> {
+  return pool!.run(directory, { name: "createWorkspace" });
+}
+
+export async function deleteWorkspace(workspaceId: number): Promise<void> {
+  return pool!.run(workspaceId, { name: "deleteWorkspace" });
 }

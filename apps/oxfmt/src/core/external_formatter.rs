@@ -38,14 +38,45 @@ pub type JsFormatEmbeddedCb = ThreadsafeFunction<
 >;
 
 /// Type alias for the callback function signature.
-/// Takes (options, parser_name, file_name, code) as separate arguments and returns formatted code.
+/// Takes (workspace_id, options, parser_name, file_name, code) as separate arguments
+/// and returns formatted code.
 pub type JsFormatFileCb = ThreadsafeFunction<
     // Input arguments
-    FnArgs<(Value, String, String, String)>, // (options, parser_name, file_name, code)
+    FnArgs<(u32, Value, String, String, String)>, // (workspace_id, options, parser_name, file_name, code)
     // Return type (what JS function returns)
     Promise<String>,
     // Arguments (repeated)
-    FnArgs<(Value, String, String, String)>,
+    FnArgs<(u32, Value, String, String, String)>,
+    // Error status
+    Status,
+    // CalleeHandled
+    false,
+>;
+
+/// Type alias for the create workspace callback function signature.
+/// Takes (directory) and returns a workspace id.
+pub type JsCreateWorkspaceCb = ThreadsafeFunction<
+    // Input arguments
+    FnArgs<(String,)>, // (directory)
+    // Return type (what JS function returns)
+    Promise<u32>,
+    // Arguments (repeated)
+    FnArgs<(String,)>,
+    // Error status
+    Status,
+    // CalleeHandled
+    false,
+>;
+
+/// Type alias for the delete workspace callback function signature.
+/// Takes (workspace_id) and returns void.
+pub type JsDeleteWorkspaceCb = ThreadsafeFunction<
+    // Input arguments
+    FnArgs<(u32,)>, // (workspace_id)
+    // Return type (what JS function returns)
+    Promise<()>,
+    // Arguments (repeated)
+    FnArgs<(u32,)>,
     // Error status
     Status,
     // CalleeHandled
@@ -58,14 +89,22 @@ type FormatEmbeddedWithConfigCallback =
     Arc<dyn Fn(&Value, &str, &str) -> Result<String, String> + Send + Sync>;
 
 /// Callback function type for formatting files with config.
-/// Takes (options, parser_name, file_name, code) and returns formatted code or an error.
+/// Takes (workspace_id, options, parser_name, file_name, code) and returns formatted code or an error.
 type FormatFileWithConfigCallback =
-    Arc<dyn Fn(&Value, &str, &str, &str) -> Result<String, String> + Send + Sync>;
+    Arc<dyn Fn(u32, &Value, &str, &str, &str) -> Result<String, String> + Send + Sync>;
 
 /// Callback function type for init external formatter.
 /// Takes num_threads and returns plugin languages.
 type InitExternalFormatterCallback =
     Arc<dyn Fn(usize) -> Result<Vec<String>, String> + Send + Sync>;
+
+/// Callback function type for creating a workspace.
+/// Takes (directory) and returns a workspace id.
+type CreateWorkspaceCallback = Arc<dyn Fn(&str) -> Result<u32, String> + Send + Sync>;
+
+/// Callback function type for deleting a workspace.
+/// Takes (workspace_id) and returns void.
+type DeleteWorkspaceCallback = Arc<dyn Fn(u32) -> Result<(), String> + Send + Sync>;
 
 /// External formatter that wraps a JS callback.
 #[derive(Clone)]
@@ -73,6 +112,8 @@ pub struct ExternalFormatter {
     pub init: InitExternalFormatterCallback,
     pub format_embedded: FormatEmbeddedWithConfigCallback,
     pub format_file: FormatFileWithConfigCallback,
+    pub create_workspace: CreateWorkspaceCallback,
+    pub delete_workspace: DeleteWorkspaceCallback,
 }
 
 impl std::fmt::Debug for ExternalFormatter {
@@ -81,6 +122,8 @@ impl std::fmt::Debug for ExternalFormatter {
             .field("init", &"<callback>")
             .field("format_embedded", &"<callback>")
             .field("format_file", &"<callback>")
+            .field("create_workspace", &"<callback>")
+            .field("delete_workspace", &"<callback>")
             .finish()
     }
 }
@@ -91,14 +134,20 @@ impl ExternalFormatter {
         init_cb: JsInitExternalFormatterCb,
         format_embedded_cb: JsFormatEmbeddedCb,
         format_file_cb: JsFormatFileCb,
+        create_workspace_cb: JsCreateWorkspaceCb,
+        delete_workspace_cb: JsDeleteWorkspaceCb,
     ) -> Self {
         let rust_init = wrap_init_external_formatter(init_cb);
         let rust_format_embedded = wrap_format_embedded(format_embedded_cb);
         let rust_format_file = wrap_format_file(format_file_cb);
+        let rust_create_workspace = wrap_create_workspace(create_workspace_cb);
+        let rust_delete_workspace = wrap_delete_workspace(delete_workspace_cb);
         Self {
             init: rust_init,
             format_embedded: rust_format_embedded,
             format_file: rust_format_file,
+            create_workspace: rust_create_workspace,
+            delete_workspace: rust_delete_workspace,
         }
     }
 
@@ -119,12 +168,23 @@ impl ExternalFormatter {
     /// Format non-js file using the JS callback.
     pub fn format_file(
         &self,
+        workspace_id: u32,
         options: &Value,
         parser_name: &str,
         file_name: &str,
         code: &str,
     ) -> Result<String, String> {
-        (self.format_file)(options, parser_name, file_name, code)
+        (self.format_file)(workspace_id, options, parser_name, file_name, code)
+    }
+
+    /// Create a workspace for external formatter.
+    pub fn create_workspace(&self, directory: &str) -> Result<u32, String> {
+        (self.create_workspace)(directory)
+    }
+
+    /// Delete a workspace for external formatter.
+    pub fn delete_workspace(&self, workspace_id: u32) -> Result<(), String> {
+        (self.delete_workspace)(workspace_id)
     }
 }
 
@@ -183,25 +243,72 @@ fn wrap_format_embedded(cb: JsFormatEmbeddedCb) -> FormatEmbeddedWithConfigCallb
 
 /// Wrap JS `formatFile` callback as a normal Rust function.
 fn wrap_format_file(cb: JsFormatFileCb) -> FormatFileWithConfigCallback {
-    Arc::new(move |options: &Value, parser_name: &str, file_name: &str, code: &str| {
+    Arc::new(
+        move |workspace_id: u32,
+              options: &Value,
+              parser_name: &str,
+              file_name: &str,
+              code: &str| {
+            block_on(async {
+                let status = cb
+                    .call_async(FnArgs::from((
+                        workspace_id,
+                        options.clone(),
+                        parser_name.to_string(),
+                        file_name.to_string(),
+                        code.to_string(),
+                    )))
+                    .await;
+                match status {
+                    Ok(promise) => match promise.await {
+                        Ok(formatted_code) => Ok(formatted_code),
+                        Err(err) => Err(format!(
+                            "JS formatFile promise rejected for file: '{file_name}', parser: '{parser_name}': {err}"
+                        )),
+                    },
+                    Err(err) => Err(format!(
+                        "Failed to call JS formatFile callback for file: '{file_name}', parser: '{parser_name}': {err}"
+                    )),
+                }
+            })
+        },
+    )
+}
+
+/// Wrap JS `createWorkspace` callback as a normal Rust function.
+fn wrap_create_workspace(cb: JsCreateWorkspaceCb) -> CreateWorkspaceCallback {
+    Arc::new(move |directory: &str| {
         block_on(async {
-            let status = cb
-                .call_async(FnArgs::from((
-                    options.clone(),
-                    parser_name.to_string(),
-                    file_name.to_string(),
-                    code.to_string(),
-                )))
-                .await;
+            let status = cb.call_async(FnArgs::from((directory.to_string(),))).await;
             match status {
                 Ok(promise) => match promise.await {
-                    Ok(formatted_code) => Ok(formatted_code),
+                    Ok(workspace_id) => Ok(workspace_id),
                     Err(err) => Err(format!(
-                        "JS formatFile promise rejected for file: '{file_name}', parser: '{parser_name}': {err}"
+                        "JS createWorkspace promise rejected for directory: '{directory}': {err}"
                     )),
                 },
                 Err(err) => Err(format!(
-                    "Failed to call JS formatFile callback for file: '{file_name}', parser: '{parser_name}': {err}"
+                    "Failed to call JS createWorkspace callback for directory: '{directory}': {err}"
+                )),
+            }
+        })
+    })
+}
+
+/// Wrap JS `deleteWorkspace` callback as a normal Rust function.
+fn wrap_delete_workspace(cb: JsDeleteWorkspaceCb) -> DeleteWorkspaceCallback {
+    Arc::new(move |workspace_id: u32| {
+        block_on(async {
+            let status = cb.call_async(FnArgs::from((workspace_id,))).await;
+            match status {
+                Ok(promise) => match promise.await {
+                    Ok(()) => Ok(()),
+                    Err(err) => Err(format!(
+                        "JS deleteWorkspace promise rejected for workspace {workspace_id}: {err}"
+                    )),
+                },
+                Err(err) => Err(format!(
+                    "Failed to call JS deleteWorkspace callback for workspace {workspace_id}: {err}"
                 )),
             }
         })

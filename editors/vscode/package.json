@@ -285,12 +285,26 @@
   },
   "activationEvents": [
     "onLanguage:astro",
+    "onLanguage:css",
+    "onLanguage:graphql",
+    "onLanguage:handlebars",
+    "onLanguage:html",
     "onLanguage:javascript",
     "onLanguage:javascriptreact",
+    "onLanguage:json",
+    "onLanguage:json5",
+    "onLanguage:jsonc",
+    "onLanguage:less",
+    "onLanguage:markdown",
+    "onLanguage:mdx",
+    "onLanguage:mjml",
+    "onLanguage:postcss",
+    "onLanguage:scss",
     "onLanguage:svelte",
     "onLanguage:typescript",
     "onLanguage:typescriptreact",
-    "onLanguage:vue"
+    "onLanguage:vue",
+    "onLanguage:yaml"
   ],
   "icon": "icon.png",
   "engines": {

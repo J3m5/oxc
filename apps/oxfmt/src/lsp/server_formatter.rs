@@ -1,30 +1,47 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use log::{debug, warn};
 use oxc_allocator::Allocator;
 use oxc_data_structures::rope::{Rope, get_line_column};
-use oxc_formatter::{
-    FormatOptions, Formatter, enable_jsx_source_type, get_parse_options, get_supported_source_type,
-    oxfmtrc::{OxfmtOptions, Oxfmtrc},
-};
+use oxc_formatter::{Formatter, enable_jsx_source_type, get_parse_options};
 use oxc_parser::Parser;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
-use crate::lsp::{FORMAT_CONFIG_FILES, options::FormatOptions as LSPFormatOptions};
-
-use oxc_language_server::{
-    Capabilities,
-    utils::normalize_path,
-    {Tool, ToolBuilder, ToolRestartChanges},
+use crate::core::{
+    ConfigResolver, FormatFileStrategy, ResolvedOptions, resolve_editorconfig_path,
+    resolve_oxfmtrc_path,
 };
+use crate::lsp::external_formatter_bridge::WorkspaceHandle;
+use crate::lsp::{
+    FORMAT_CONFIG_FILES, external_formatter_bridge::ExternalFormatterBridge,
+    options::FormatOptions as LSPFormatOptions,
+};
+use oxc_language_server::{Capabilities, Tool, ToolBuilder, ToolRestartChanges};
 
-pub struct ServerFormatterBuilder;
+use sort_package_json::SortOptions;
+
+#[derive(Clone, Default)]
+pub struct ServerFormatterBuilder {
+    external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
+}
 
 impl ServerFormatterBuilder {
     /// # Panics
     /// Panics if the root URI cannot be converted to a file path.
-    pub fn build(root_uri: &Uri, options: serde_json::Value) -> ServerFormatter {
+    pub fn new(external_bridge: Option<Arc<dyn ExternalFormatterBridge>>) -> Self {
+        Self { external_bridge }
+    }
+
+    /// # Panics
+    /// Panics if the root URI cannot be converted to a file path.
+    pub fn build(
+        root_uri: &Uri,
+        options: serde_json::Value,
+        external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
+    ) -> ServerFormatter {
         let options = match serde_json::from_value::<LSPFormatOptions>(options) {
             Ok(opts) => opts,
             Err(err) => {
@@ -36,21 +53,20 @@ impl ServerFormatterBuilder {
         };
 
         let root_path = root_uri.to_file_path().unwrap();
-        let oxfmtrc = Self::get_config(&root_path, options.config_path.as_ref());
-        let (format_options, oxfmt_options) = Self::get_options(oxfmtrc);
+        let (config_resolver, ignore_patterns) =
+            Self::resolve_config(&root_path, options.config_path.as_ref());
 
-        let gitignore_glob =
-            match Self::create_ignore_globs(&root_path, &oxfmt_options.ignore_patterns) {
-                Ok(glob) => Some(glob),
-                Err(err) => {
-                    warn!(
-                        "Failed to create gitignore globs: {err}, proceeding without ignore globs"
-                    );
-                    None
-                }
-            };
+        let gitignore_glob = match Self::create_ignore_globs(&root_path, &ignore_patterns) {
+            Ok(glob) => Some(glob),
+            Err(err) => {
+                warn!("Failed to create gitignore globs: {err}, proceeding without ignore globs");
+                None
+            }
+        };
 
-        ServerFormatter::new(format_options, gitignore_glob)
+        let (external_bridge, workspace_handle) =
+            Self::init_external_formatter(&root_path, external_bridge);
+        ServerFormatter::new(config_resolver, gitignore_glob, external_bridge, workspace_handle)
     }
 }
 
@@ -64,75 +80,45 @@ impl ToolBuilder for ServerFormatterBuilder {
             Some(tower_lsp_server::ls_types::OneOf::Left(true));
     }
     fn build_boxed(&self, root_uri: &Uri, options: serde_json::Value) -> Box<dyn Tool> {
-        Box::new(ServerFormatterBuilder::build(root_uri, options))
+        Box::new(ServerFormatterBuilder::build(root_uri, options, self.external_bridge.clone()))
     }
 }
 
 impl ServerFormatterBuilder {
-    fn get_config(root_path: &Path, config_path: Option<&String>) -> Oxfmtrc {
-        if let Some(config) = Self::search_config_file(root_path, config_path) {
-            if let Ok(oxfmtrc) = Self::from_file(&config) {
-                oxfmtrc
-            } else {
-                warn!("Failed to initialize oxfmtrc config: {}", config.to_string_lossy());
-                Oxfmtrc::default()
-            }
-        } else {
-            warn!(
-                "Config file not found: {}, fallback to default config",
-                config_path.unwrap_or(&FORMAT_CONFIG_FILES.join(", "))
-            );
-            Oxfmtrc::default()
-        }
-    }
+    fn resolve_config(
+        root_path: &Path,
+        config_path: Option<&String>,
+    ) -> (ConfigResolver, Vec<String>) {
+        let config_path = config_path.filter(|path| !path.is_empty()).map(PathBuf::from);
+        let oxfmtrc_path = resolve_oxfmtrc_path(root_path, config_path.as_deref());
 
-    /// # Errors
-    /// Returns error if:
-    /// - file cannot be found or read
-    /// - file content is not valid JSONC
-    /// - deserialization fails for string enum values
-    fn from_file(path: &Path) -> Result<Oxfmtrc, String> {
-        let mut string = std::fs::read_to_string(path)
-            // Do not include OS error, it differs between platforms
-            .map_err(|_| format!("Failed to read config {}: File not found", path.display()))?;
-
-        // JSONC support - strip comments
-        json_strip_comments::strip(&mut string)
-            .map_err(|err| format!("Failed to strip comments from {}: {err}", path.display()))?;
-
-        // NOTE: String enum deserialization errors are handled here
-        serde_json::from_str(&string)
-            .map_err(|err| format!("Failed to deserialize config {}: {err}", path.display()))
-    }
-
-    fn get_options(oxfmtrc: Oxfmtrc) -> (FormatOptions, OxfmtOptions) {
-        match oxfmtrc.into_options() {
-            Ok(opts) => opts,
+        let editorconfig_path = resolve_editorconfig_path(root_path);
+        let mut config_resolver = match ConfigResolver::from_config_paths(
+            root_path,
+            oxfmtrc_path.as_deref(),
+            editorconfig_path.as_deref(),
+        ) {
+            Ok(resolver) => resolver,
             Err(err) => {
-                warn!("Failed to parse oxfmtrc config: {err}, fallback to default config");
-                (FormatOptions::default(), OxfmtOptions::default())
+                warn!("Failed to load configuration file: {err}, using default config");
+                ConfigResolver::from_config_paths(root_path, None, None)
+                    .expect("default config should always load")
             }
-        }
-    }
+        };
 
-    fn search_config_file(root_path: &Path, config_path: Option<&String>) -> Option<PathBuf> {
-        if let Some(config_path) = config_path.filter(|s| !s.is_empty()) {
-            let config = normalize_path(root_path.join(config_path));
-            if config.try_exists().is_ok_and(|exists| exists) {
-                return Some(config);
+        let ignore_patterns = match config_resolver.build_and_validate() {
+            Ok(patterns) => patterns,
+            Err(err) => {
+                warn!("Failed to parse configuration: {err}, using default config");
+                let mut fallback = ConfigResolver::from_config_paths(root_path, None, None)
+                    .expect("default config should always load");
+                let patterns = fallback.build_and_validate().unwrap_or_default();
+                config_resolver = fallback;
+                patterns
             }
+        };
 
-            warn!(
-                "Config file not found: {}, searching for `{}` in the root path",
-                config.to_string_lossy(),
-                FORMAT_CONFIG_FILES.join(", ")
-            );
-        }
-
-        FORMAT_CONFIG_FILES.iter().find_map(|&file| {
-            let config = normalize_path(root_path.join(file));
-            config.try_exists().is_ok_and(|exists| exists).then_some(config)
-        })
+        (config_resolver, ignore_patterns)
     }
 
     fn create_ignore_globs(
@@ -153,10 +139,41 @@ impl ServerFormatterBuilder {
 
         builder.build().map_err(|_| "Failed to build ignore globs".to_string())
     }
+
+    fn init_external_formatter(
+        root_path: &Path,
+        external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
+    ) -> (Option<Arc<dyn ExternalFormatterBridge>>, Option<WorkspaceHandle>) {
+        let mut external_bridge = external_bridge;
+        let mut workspace_handle = None;
+
+        if let Some(bridge) = external_bridge.as_ref()
+            && let Err(err) = bridge.init(1)
+        {
+            debug!("Failed to initialize external formatter bridge: {err}");
+            external_bridge = None;
+        }
+
+        if let Some(bridge) = external_bridge.as_ref() {
+            match bridge.create_workspace(root_path) {
+                Ok(handle) => {
+                    workspace_handle = Some(handle);
+                }
+                Err(err) => {
+                    debug!("Failed to create external formatter workspace: {err}");
+                    external_bridge = None;
+                }
+            }
+        }
+
+        (external_bridge, workspace_handle)
+    }
 }
 pub struct ServerFormatter {
-    options: FormatOptions,
+    config_resolver: ConfigResolver,
     gitignore_glob: Option<Gitignore>,
+    workspace_handle: Option<WorkspaceHandle>,
+    external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
 }
 
 impl Tool for ServerFormatter {
@@ -242,14 +259,13 @@ impl Tool for ServerFormatter {
     fn run_format(&self, uri: &Uri, content: Option<&str>) -> Option<Vec<TextEdit>> {
         // Formatter is disabled
 
-        let path = uri.to_file_path()?;
+        let path: PathBuf = uri.to_file_path()?.into();
 
         if self.is_ignored(&path) {
             debug!("File is ignored: {}", path.display());
             return None;
         }
 
-        let source_type = get_supported_source_type(&path).map(enable_jsx_source_type)?;
         // Declaring Variable to satisfy borrow checker
         let file_content;
         let source_text = if let Some(content) = content {
@@ -268,40 +284,143 @@ impl Tool for ServerFormatter {
             &file_content
         };
 
-        let allocator = Allocator::new();
-        let ret = Parser::new(&allocator, source_text, source_type)
-            .with_options(get_parse_options())
-            .parse();
+        let strategy = FormatFileStrategy::try_from(path.clone()).ok()?;
+        match strategy {
+            FormatFileStrategy::OxcFormatter { source_type, .. } => {
+                let ResolvedOptions::OxcFormatter { format_options, insert_final_newline, .. } =
+                    self.config_resolver.resolve(&strategy)
+                else {
+                    return None;
+                };
 
-        if !ret.errors.is_empty() {
-            return None;
+                let source_type = enable_jsx_source_type(source_type);
+                let allocator = Allocator::new();
+                let ret = Parser::new(&allocator, source_text, source_type)
+                    .with_options(get_parse_options())
+                    .parse();
+
+                if !ret.errors.is_empty() {
+                    return None;
+                }
+
+                let mut code = Formatter::new(&allocator, format_options).build(&ret.program);
+                apply_insert_final_newline(&mut code, insert_final_newline);
+
+                if code == *source_text {
+                    return Some(vec![]);
+                }
+
+                Some(build_text_edits(source_text, &code))
+            }
+            FormatFileStrategy::OxfmtToml { .. } => None,
+            FormatFileStrategy::ExternalFormatter { parser_name, .. } => {
+                let Some(bridge) = &self.external_bridge else {
+                    debug!("External formatter bridge not available for {}", path.display());
+                    return None;
+                };
+                let Some(workspace_handle) = self.workspace_handle else {
+                    debug!("External formatter workspace not available for {}", path.display());
+                    return None;
+                };
+
+                let ResolvedOptions::ExternalFormatter { external_options, insert_final_newline } =
+                    self.config_resolver.resolve(&strategy)
+                else {
+                    return None;
+                };
+
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                let code = match bridge.format_file(
+                    workspace_handle,
+                    &external_options,
+                    parser_name,
+                    file_name,
+                    source_text,
+                ) {
+                    Ok(code) => code,
+                    Err(err) => {
+                        debug!("External formatter failed for {}: {err}", path.display());
+                        return None;
+                    }
+                };
+
+                let mut code = code;
+                apply_insert_final_newline(&mut code, insert_final_newline);
+
+                if code == *source_text {
+                    return Some(vec![]);
+                }
+
+                Some(build_text_edits(source_text, &code))
+            }
+            FormatFileStrategy::ExternalFormatterPackageJson { parser_name, .. } => {
+                let Some(bridge) = &self.external_bridge else {
+                    debug!("External formatter bridge not available for {}", path.display());
+                    return None;
+                };
+                let Some(workspace_handle) = self.workspace_handle else {
+                    debug!("External formatter workspace not available for {}", path.display());
+                    return None;
+                };
+
+                let ResolvedOptions::ExternalFormatterPackageJson {
+                    external_options,
+                    sort_package_json,
+                    insert_final_newline,
+                } = self.config_resolver.resolve(&strategy)
+                else {
+                    return None;
+                };
+
+                let source_text = if sort_package_json {
+                    let options = SortOptions { sort_scripts: false, pretty: false };
+                    match sort_package_json::sort_package_json_with_options(source_text, &options) {
+                        Ok(sorted) => Cow::Owned(sorted),
+                        Err(err) => {
+                            debug!("Failed to sort package.json {}: {err}", path.display());
+                            return None;
+                        }
+                    }
+                } else {
+                    Cow::Borrowed(source_text)
+                };
+
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                let code = match bridge.format_file(
+                    workspace_handle,
+                    &external_options,
+                    parser_name,
+                    file_name,
+                    source_text.as_ref(),
+                ) {
+                    Ok(code) => code,
+                    Err(err) => {
+                        debug!("External formatter failed for {}: {err}", path.display());
+                        return None;
+                    }
+                };
+
+                let mut code = code;
+                apply_insert_final_newline(&mut code, insert_final_newline);
+
+                if code == *source_text {
+                    return Some(vec![]);
+                }
+
+                Some(build_text_edits(source_text.as_ref(), &code))
+            }
         }
-
-        let code = Formatter::new(&allocator, self.options.clone()).build(&ret.program);
-
-        // nothing has changed
-        if code == *source_text {
-            return Some(vec![]);
-        }
-
-        let (start, end, replacement) = compute_minimal_text_edit(source_text, &code);
-        let rope = Rope::from(source_text);
-        let (start_line, start_character) = get_line_column(&rope, start, source_text);
-        let (end_line, end_character) = get_line_column(&rope, end, source_text);
-
-        Some(vec![TextEdit::new(
-            Range::new(
-                Position::new(start_line, start_character),
-                Position::new(end_line, end_character),
-            ),
-            replacement.to_string(),
-        )])
     }
 }
 
 impl ServerFormatter {
-    pub fn new(options: FormatOptions, gitignore_glob: Option<Gitignore>) -> Self {
-        Self { options, gitignore_glob }
+    pub fn new(
+        config_resolver: ConfigResolver,
+        gitignore_glob: Option<Gitignore>,
+        external_bridge: Option<Arc<dyn ExternalFormatterBridge>>,
+        workspace_handle: Option<WorkspaceHandle>,
+    ) -> Self {
+        Self { config_resolver, gitignore_glob, workspace_handle, external_bridge }
     }
 
     fn is_ignored(&self, path: &Path) -> bool {
@@ -313,6 +432,18 @@ impl ServerFormatter {
             glob.matched_path_or_any_parents(path, path.is_dir()).is_ignore()
         } else {
             false
+        }
+    }
+}
+
+impl Drop for ServerFormatter {
+    fn drop(&mut self) {
+        let (Some(bridge), Some(handle)) = (&self.external_bridge, self.workspace_handle) else {
+            return;
+        };
+
+        if let Err(err) = bridge.delete_workspace(handle) {
+            debug!("Failed to delete external formatter workspace: {err}");
         }
     }
 }
@@ -358,6 +489,28 @@ fn compute_minimal_text_edit<'a>(
     (start, end, replacement)
 }
 
+fn apply_insert_final_newline(code: &mut String, insert_final_newline: bool) {
+    if !insert_final_newline {
+        let trimmed_len = code.trim_end().len();
+        code.truncate(trimmed_len);
+    }
+}
+
+fn build_text_edits(source_text: &str, formatted_text: &str) -> Vec<TextEdit> {
+    let (start, end, replacement) = compute_minimal_text_edit(source_text, formatted_text);
+    let rope = Rope::from(source_text);
+    let (start_line, start_character) = get_line_column(&rope, start, source_text);
+    let (end_line, end_character) = get_line_column(&rope, end, source_text);
+
+    vec![TextEdit::new(
+        Range::new(
+            Position::new(start_line, start_character),
+            Position::new(end_line, end_character),
+        ),
+        replacement.to_string(),
+    )]
+}
+
 // Almost the same as `oxfmt::walk::load_ignore_paths`, but does not handle custom ignore files.
 fn load_ignore_paths(cwd: &Path) -> Vec<PathBuf> {
     [".gitignore", ".prettierignore"]
@@ -378,7 +531,7 @@ mod tests_builder {
     fn test_server_capabilities() {
         use tower_lsp_server::ls_types::{OneOf, ServerCapabilities};
 
-        let builder = ServerFormatterBuilder;
+        let builder = ServerFormatterBuilder::default();
         let mut capabilities = ServerCapabilities::default();
 
         builder.server_capabilities(&mut capabilities, &Capabilities::default());
@@ -465,7 +618,9 @@ mod tests {
     use serde_json::json;
 
     use super::compute_minimal_text_edit;
-    use crate::lsp::tester::Tester;
+    use crate::lsp::server_formatter::ServerFormatterBuilder;
+    use crate::lsp::tester::{Tester, get_file_uri};
+    use oxc_language_server::Tool;
 
     #[test]
     #[should_panic(expected = "assertion failed")]
@@ -602,5 +757,17 @@ mod tests {
             }),
         )
         .format_and_snapshot_multiple_file(&["ignored.ts", "not-ignored.js"]);
+    }
+
+    #[test]
+    fn test_prettier_only_without_bridge() {
+        let root_uri = Tester::get_root_uri("test/fixtures/lsp/prettier_only");
+        let formatter = ServerFormatterBuilder::build(&root_uri, json!({}), None);
+        let files = ["sample.json", "sample.html"];
+        for file in files {
+            let uri = get_file_uri(&format!("test/fixtures/lsp/prettier_only/{file}"));
+            let formatted = formatter.run_format(&uri, None);
+            assert!(formatted.is_none(), "{file} should be skipped without bridge");
+        }
     }
 }

@@ -1,5 +1,11 @@
 import { format as napiFormat } from "./bindings";
-import { resolvePlugins, formatEmbeddedCode, formatFile } from "./libs/prettier";
+import {
+  createWorkspace,
+  deleteWorkspace,
+  formatEmbeddedCode,
+  formatFile,
+  resolvePlugins,
+} from "./libs/prettier";
 
 // napi-JS `oxfmt` API entry point
 // See also `format()` function in `./src/main_napi.rs`
@@ -17,7 +23,10 @@ export async function format(fileName: string, sourceText: string, options?: For
     options ?? {},
     resolvePlugins,
     (options, tagName, code) => formatEmbeddedCode({ options, tagName, code }),
-    (options, parserName, fileName, code) => formatFile({ options, parserName, fileName, code }),
+    (workspaceId, options, parserName, fileName, code) =>
+      formatFile({ workspaceId, options, parserName, fileName, code }),
+    createWorkspace,
+    deleteWorkspace,
   );
 }
 

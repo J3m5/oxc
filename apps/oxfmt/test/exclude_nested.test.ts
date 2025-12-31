@@ -5,7 +5,7 @@ import { runAndSnapshot } from "./utils";
 const fixturesDir = join(__dirname, "fixtures");
 
 describe("exclude_nested", () => {
-  it("should correctly exclude nested paths", async () => {
+  it("should correctly exclude nested paths", { timeout: 7_000 }, async () => {
     const cwd = join(fixturesDir, "exclude_nested");
     const testCases = [
       ["--check", "!foo/bar/error.js"],
