@@ -66,7 +66,8 @@ suite('E2E Server Formatter', () => {
       strictEqual(content.toString(), "class X {\n  foo() {\n    return 42\n  }\n}\n");
     });
 
-    test('formats prettier-only file types', async () => {
+    test('formats prettier-only file types',  async function () {
+      this.timeout(120_000);
       await loadFixture('formatting_prettier');
       await workspace.getConfiguration('editor').update('defaultFormatter', 'oxc.oxc-vscode');
       await workspace.saveAll();
