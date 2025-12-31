@@ -135,6 +135,11 @@ fn get_external_parser_name(file_name: &str, extension: Option<&str>) -> Option<
     if file_name == "composer.json" || extension == Some("importmap") {
         return Some("json-stringify");
     }
+    if let Some(ext) = extension
+        && JSON_SUFFIX_EXTENSIONS.contains(ext)
+    {
+        return Some("json");
+    }
     if JSON_FILENAMES.contains(file_name) {
         return Some("json");
     }
@@ -243,6 +248,13 @@ static JSON_EXTENSIONS: phf::Set<&'static str> = phf_set! {
     "webmanifest",
     "yy",
     "yyp",
+};
+
+// File name suffix extensions like `*.json.example`.
+// `Path::extension()` only returns the last segment.
+static JSON_SUFFIX_EXTENSIONS: phf::Set<&'static str> = phf_set! {
+    "example",
+    "backup",
 };
 
 static JSON_FILENAMES: phf::Set<&'static str> = phf_set! {
@@ -372,6 +384,8 @@ mod tests {
             ("config.importmap", Some("json-stringify")),
             ("data.json", Some("json")),
             ("schema.avsc", Some("json")),
+            ("data.json.example", Some("json")),
+            ("state.tfstate.backup", Some("json")),
             ("config.code-workspace", Some("jsonc")),
             ("settings.json5", Some("json5")),
             // HTML
