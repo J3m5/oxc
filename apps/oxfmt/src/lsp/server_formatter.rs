@@ -10,7 +10,10 @@ use oxc_formatter::{Formatter, enable_jsx_source_type, get_parse_options};
 use oxc_parser::Parser;
 use tower_lsp_server::ls_types::{Pattern, Position, Range, ServerCapabilities, TextEdit, Uri};
 
-use crate::core::{ConfigResolver, FormatFileStrategy, ResolvedOptions, resolve_editorconfig_path};
+use crate::core::{
+    ConfigResolver, FormatFileStrategy, ResolvedOptions, resolve_editorconfig_path,
+    resolve_oxfmtrc_path,
+};
 use crate::lsp::external_formatter_bridge::WorkspaceHandle;
 use crate::lsp::{
     FORMAT_CONFIG_FILES, external_formatter_bridge::ExternalFormatterBridge,
@@ -86,7 +89,8 @@ impl ServerFormatterBuilder {
         root_path: &Path,
         config_path: Option<&String>,
     ) -> (ConfigResolver, Vec<String>) {
-        let oxfmtrc_path = Self::find_config_path(root_path, config_path);
+        let config_path = config_path.filter(|path| !path.is_empty()).map(PathBuf::from);
+        let oxfmtrc_path = resolve_oxfmtrc_path(root_path, config_path.as_deref());
 
         let editorconfig_path = resolve_editorconfig_path(root_path);
         let mut config_resolver = match ConfigResolver::from_config_paths(
@@ -115,26 +119,6 @@ impl ServerFormatterBuilder {
         };
 
         (config_resolver, ignore_patterns)
-    }
-
-    fn find_config_path(root_path: &Path, config_path: Option<&String>) -> Option<PathBuf> {
-        if let Some(config_path) = config_path.filter(|s| !s.is_empty()) {
-            let config = root_path.join(config_path);
-            if config.try_exists().is_ok_and(|exists| exists) {
-                return Some(config);
-            }
-
-            warn!(
-                "Config file not found: {}, searching for `{}` in the root path",
-                config.display(),
-                FORMAT_CONFIG_FILES.join(", ")
-            );
-        }
-
-        FORMAT_CONFIG_FILES.iter().find_map(|&file| {
-            let config = root_path.join(file);
-            config.try_exists().is_ok_and(|exists| exists).then_some(config)
-        })
     }
 
     fn create_ignore_globs(
